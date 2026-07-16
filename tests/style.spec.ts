@@ -82,16 +82,20 @@ test("menu sheet unmounts when closed (no offscreen DOM)", async ({ page }) => {
   await expect(page.getByRole("dialog", { name: "Game menu" })).toHaveCount(0)
 })
 
-test("mark-mode toggle changes its computed appearance", async ({ page }) => {
+test("mark-mode toggle slides its thumb between fill and mark", async ({ page }) => {
   await page.goto("/")
   await dismissIntro(page)
+  // Read the authored inline transform (the animation's target value) rather
+  // than the computed one, which can be caught mid-transition depending on
+  // exactly when the read happens.
   const off = await page
     .getByLabel("Switch to mark mode")
-    .evaluate((el) => getComputedStyle(el).borderColor)
+    .evaluate((el) => (el.firstElementChild as HTMLElement).style.transform)
   await page.getByLabel("Switch to mark mode").click()
+  await expect(page.getByLabel("Switch to fill mode")).toHaveAttribute("aria-pressed", "true")
   const on = await page
     .getByLabel("Switch to fill mode")
-    .evaluate((el) => getComputedStyle(el).borderColor)
+    .evaluate((el) => (el.firstElementChild as HTMLElement).style.transform)
   expect(on).not.toBe(off)
 })
 

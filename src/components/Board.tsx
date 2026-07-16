@@ -6,6 +6,9 @@ import { Cell } from "./Cell"
 import { cn } from "@/lib/utils"
 
 const MAX_SCALE = 2.5
+// Standard nonogram convention: a bolder divider every 5 cells so players
+// can count position in a large grid at a glance.
+const BLOCK_SIZE = 5
 
 // Fit a `rows × cols` puzzle grid (plus its clue headers) inside a
 // `width × height` viewport. Cells are kept at a comfortable tap-friendly
@@ -26,8 +29,8 @@ function fitCells(
   const MAX_CELL = 48
   // Reserve "phantom" cells worth of space for the clue headers up front so
   // the fit calculation accounts for them without a second measuring pass.
-  const headerCols = Math.min(3, Math.max(1.2, maxRowClueLen * 0.65))
-  const headerRows = Math.min(3, Math.max(1.2, maxColClueLen * 0.55))
+  const headerCols = Math.min(3, Math.max(1.4, maxRowClueLen * 0.75))
+  const headerRows = Math.min(3, Math.max(1.4, maxColClueLen * 0.65))
   const availW = Math.max(0, width - padding * 2)
   const availH = Math.max(0, height - padding * 2)
   const byWidth = Math.floor((availW - (cols - 1 + headerCols) * gap) / (cols + headerCols))
@@ -48,6 +51,17 @@ interface Props {
   onCollect: (r: number, c: number) => void
 }
 
+type PaintAction = "fill" | "mark" | "unmark"
+
+/** What a stroke starting on this cell should do, given the current tool. */
+function actionForCell(board: BoardT, r: number, c: number, markMode: boolean): PaintAction | "collect" | null {
+  const cell = board[r]?.[c]
+  if (!cell) return null
+  if (cell.state === "filled") return cell.item ? "collect" : null
+  if (cell.state === "marked") return markMode ? "unmark" : null
+  return markMode ? "mark" : "fill"
+}
+
 export function Board({
   board,
   clues,
@@ -62,6 +76,7 @@ export function Board({
   const rows = board.length
   const cols = board[0]?.length ?? 0
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const gridRef = useRef<HTMLDivElement | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   // Zoom level (1 = neutral; max is MAX_SCALE, min is computed dynamically
   // so the board can always be fully zoomed-out into view).
@@ -72,6 +87,11 @@ export function Board({
   // is only attached once — always reads the current value without needing a
   // re-bind.
   const minScaleRef = useRef(0.4)
+
+  // Live ref so the gesture handlers (bound once) always see the current
+  // board/mode/callbacks without needing to be re-attached on every render.
+  const liveRef = useRef({ board, markMode, onFill, onMark, onCollect })
+  liveRef.current = { board, markMode, onFill, onMark, onCollect }
 
   useEffect(() => {
     const el = containerRef.current
@@ -84,9 +104,212 @@ export function Board({
     return () => ro.disconnect()
   }, [])
 
+  // ── Drag-to-paint ──────────────────────────────────────────────────────
+  // Standard nonogram interaction: press a cell and drag across a row/column
+  // to fill or mark every cell the finger crosses in one stroke. A single
+  // tap (no movement) is handled by the native `click` event instead — a
+  // real click/keyboard-activation click only fires when press and release
+  // land on the same element, so it never double-fires alongside a drag.
+  type DragSession = {
+    action: PaintAction | null
+    originR: number
+    originC: number
+    dragging: boolean
+    visited: Set<string>
+  }
+  const dragRef = useRef<DragSession | null>(null)
+
+  const cellAt = useCallback((x: number, y: number) => {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null
+    const btn = el?.closest("button[data-row]") as HTMLElement | null
+    if (!btn) return null
+    const r = Number(btn.getAttribute("data-row"))
+    const c = Number(btn.getAttribute("data-col"))
+    if (Number.isNaN(r) || Number.isNaN(c)) return null
+    return { r, c }
+  }, [])
+
+  // Cells entered during a fast drag can be queued faster than React commits
+  // each fill/mark's state update. Calling onFill/onMark synchronously for
+  // several cells in the same tick is unsafe: each call reads `board` from
+  // the same pre-commit snapshot (via liveRef), so React's batched setState
+  // only keeps the *last* of several same-tick updates — earlier cells in
+  // the stroke would silently fail to paint. Queueing and draining one cell
+  // per animation frame guarantees each call sees the previous cell's
+  // already-committed result before deciding the next one.
+  const paintQueueRef = useRef<{ action: PaintAction; r: number; c: number }[]>([])
+  const paintingRef = useRef(false)
+
+  const paint = useCallback((action: PaintAction, r: number, c: number) => {
+    paintQueueRef.current.push({ action, r, c })
+    if (paintingRef.current) return
+    paintingRef.current = true
+
+    // A hoisted local function (rather than a self-referencing const) so it
+    // can recurse via requestAnimationFrame without a temporal-dead-zone
+    // self-reference in its own initializer.
+    function drainOne() {
+      const next = paintQueueRef.current.shift()
+      if (!next) {
+        paintingRef.current = false
+        return
+      }
+      const { board: b, onFill: fill, onMark: mark } = liveRef.current
+      const cell = b[next.r]?.[next.c]
+      if (cell) {
+        if (next.action === "fill") {
+          // Drag-fill only paints cells that are actually correct, so a
+          // sloppy swipe across a run can't rack up a cascade of mistakes —
+          // a single deliberate tap can still be wrong (click path handles that).
+          if (cell.state === "hidden" && cell.solution) fill(next.r, next.c)
+        } else if (next.action === "mark") {
+          if (cell.state === "hidden") mark(next.r, next.c)
+        } else if (next.action === "unmark") {
+          if (cell.state === "marked") mark(next.r, next.c)
+        }
+      }
+      requestAnimationFrame(drainOne)
+    }
+    requestAnimationFrame(drainOne)
+  }, [])
+
+  const beginDrag = useCallback((r: number, c: number) => {
+    const action = actionForCell(liveRef.current.board, r, c, liveRef.current.markMode)
+    dragRef.current = {
+      action: action === "collect" || action === null ? null : action,
+      originR: r,
+      originC: c,
+      dragging: false,
+      visited: new Set(),
+    }
+  }, [])
+
+  const continueDrag = useCallback((r: number, c: number) => {
+    const session = dragRef.current
+    if (!session) return false
+    if (r === session.originR && c === session.originC && !session.dragging) return false
+    if (!session.dragging) {
+      session.dragging = true
+      if (session.action) {
+        session.visited.add(`${session.originR}-${session.originC}`)
+        paint(session.action, session.originR, session.originC)
+      }
+    }
+    const key = `${r}-${c}`
+    if (session.action && !session.visited.has(key)) {
+      session.visited.add(key)
+      paint(session.action, r, c)
+    }
+    return true
+  }, [paint])
+
+  // Touch: a stroke that starts on a cell always paints, never pans — cells
+  // are `touch-action:none` so the browser never claims the gesture for
+  // native scrolling. A stroke that starts off a cell (the padded margin
+  // around the board) is left alone entirely, so it pans normally.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) {
+        dragRef.current = null
+        return
+      }
+      const t = e.touches[0]
+      const hit = cellAt(t.clientX, t.clientY)
+      if (!hit) return
+      beginDrag(hit.r, hit.c)
+    }
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!dragRef.current || e.touches.length !== 1) return
+      const t = e.touches[0]
+      const hit = cellAt(t.clientX, t.clientY)
+      if (!hit) return
+      if (continueDrag(hit.r, hit.c)) e.preventDefault()
+    }
+
+    const onTouchEnd = () => {
+      dragRef.current = null
+    }
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true })
+    el.addEventListener("touchmove", onTouchMove, { passive: false })
+    el.addEventListener("touchend", onTouchEnd, { passive: true })
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true })
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart)
+      el.removeEventListener("touchmove", onTouchMove)
+      el.removeEventListener("touchend", onTouchEnd)
+      el.removeEventListener("touchcancel", onTouchEnd)
+    }
+  }, [cellAt, beginDrag, continueDrag])
+
+  // Mouse: primary-button drag paints the same way touch does. A plain
+  // click (no movement) is left to the onClick handler below.
+  const handleGridMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      const btn = (e.target as HTMLElement).closest("button[data-row]") as HTMLElement | null
+      if (!btn) return
+      const r = Number(btn.getAttribute("data-row"))
+      const c = Number(btn.getAttribute("data-col"))
+      if (Number.isNaN(r) || Number.isNaN(c)) return
+      beginDrag(r, c)
+
+      const onMove = (ev: MouseEvent) => {
+        const hit = cellAt(ev.clientX, ev.clientY)
+        if (hit) continueDrag(hit.r, hit.c)
+      }
+      const onUp = () => {
+        dragRef.current = null
+        window.removeEventListener("mousemove", onMove)
+        window.removeEventListener("mouseup", onUp)
+      }
+      window.addEventListener("mousemove", onMove)
+      window.addEventListener("mouseup", onUp)
+    },
+    [beginDrag, cellAt, continueDrag],
+  )
+
+  // A tap/click (no drag) — also the path for keyboard Enter/Space
+  // activation, which fires `click` directly with no preceding mousedown.
+  const handleGridClick = useCallback(
+    (e: React.MouseEvent) => {
+      const btn = (e.target as HTMLElement).closest("button[data-row]") as HTMLElement | null
+      if (!btn) return
+      const r = Number(btn.getAttribute("data-row"))
+      const c = Number(btn.getAttribute("data-col"))
+      if (Number.isNaN(r) || Number.isNaN(c)) return
+      const { board: b, onFill: fill, onMark: mark, onCollect: collect } = liveRef.current
+      if (e.shiftKey || e.altKey) {
+        mark(r, c)
+        return
+      }
+      const action = actionForCell(b, r, c, liveRef.current.markMode)
+      if (action === "collect") collect(r, c)
+      else if (action === "fill") fill(r, c) // deliberate single tap — full mistake risk allowed
+      else if (action === "mark" || action === "unmark") mark(r, c)
+    },
+    [],
+  )
+
+  const handleGridContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const btn = (e.target as HTMLElement).closest("button[data-row]") as HTMLElement | null
+    if (!btn) return
+    const r = Number(btn.getAttribute("data-row"))
+    const c = Number(btn.getAttribute("data-col"))
+    if (Number.isNaN(r) || Number.isNaN(c)) return
+    const cell = liveRef.current.board[r]?.[c]
+    if (cell && cell.state !== "filled") liveRef.current.onMark(r, c)
+  }, [])
+
   // Pinch-zoom + two-finger pan on the scroll container. The browser
-  // already handles one-finger scrolling via `touch-action: pan-x pan-y`,
-  // so this hook only kicks in for two-finger gestures.
+  // already handles one-finger scrolling via `touch-action: pan-x pan-y`
+  // for strokes that start off the board (see the drag-paint effect above
+  // for strokes that start on a cell).
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -109,8 +332,9 @@ export function Board({
 
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length < 2) return
-      // Two-finger gesture — claim it from the browser so we drive both
-      // zoom and pan ourselves.
+      // Two-finger gesture — claim it from the browser (and cancel any
+      // in-flight paint stroke) so we drive both zoom and pan ourselves.
+      dragRef.current = null
       e.preventDefault()
       const rect = el.getBoundingClientRect()
       const c = centroid(e.touches)
@@ -176,11 +400,15 @@ export function Board({
   }, [])
 
   // Reset scale to neutral and re-centre when the board changes (new level /
-  // new run). Using rows/cols as a proxy avoids resetting on every fill.
+  // new run) OR when the container is (re)measured. The latter matters on
+  // first mount: the very first render has containerSize={0,0} (padding not
+  // applied yet), so centering must re-run once the real size lands —
+  // otherwise the scroll position gets "baked in" from that zero-padding
+  // layout and never catches up once the real padding appears.
   useEffect(() => {
     setScale(1)
     centerScroll()
-  }, [rows, cols, centerScroll])
+  }, [rows, cols, containerSize.width, containerSize.height, centerScroll])
 
   const maxRowClueLen = useMemo(
     () => Math.max(1, ...clues.rows.map((c) => c.length)),
@@ -197,8 +425,8 @@ export function Board({
   )
 
   const clueFont = Math.max(9, Math.round(cellSize * 0.32))
-  const rowHeaderW = Math.max(cellSize, Math.round(maxRowClueLen * (clueFont * 0.62 + 4) + 10))
-  const colHeaderH = Math.max(cellSize, Math.round(maxColClueLen * (clueFont + 3) + 10))
+  const rowHeaderW = Math.max(cellSize, Math.round(maxRowClueLen * (clueFont * 0.62 + 4) + 16))
+  const colHeaderH = Math.max(cellSize, Math.round(maxColClueLen * (clueFont + 6) + 12))
 
   const naturalWidth =
     padding * 2 + rowHeaderW + gap + cols * cellSize + Math.max(0, cols - 1) * gap
@@ -242,7 +470,7 @@ export function Board({
 
   // Arrow-key navigation: delegate from the grid container so we don't need a
   // handler on every cell. `data-row` / `data-col` attributes on each button
-  // (set by Cell.tsx) provide the position without parsing the aria-label.
+  // provide the position without parsing the aria-label.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const target = e.target as HTMLElement
@@ -262,7 +490,7 @@ export function Board({
       }
       e.preventDefault()
       if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) return
-      const next = containerRef.current?.querySelector(
+      const next = gridRef.current?.querySelector(
         `button[data-row="${nr}"][data-col="${nc}"]`,
       ) as HTMLElement | null
       next?.focus()
@@ -271,19 +499,25 @@ export function Board({
   )
 
   return (
-    // Outer scroll viewport. One-finger drag scrolls natively (touch-action),
-    // two-finger drag scales+pans via the effect above.
+    // Outer scroll viewport. One-finger drag scrolls natively when it starts
+    // off the board (touch-action); on a cell it paints instead (see the
+    // drag-paint effect above). Two-finger drag always scales+pans.
     <div
       ref={containerRef}
       className="board-scroll relative h-full w-full overflow-auto overscroll-contain [touch-action:pan-x_pan-y]"
     >
-      {/* Wrapper sized to at least the scroll viewport. Half-viewport padding
-          on every side gives the player enough room to pan until any edge of
-          the board reaches the centre of the screen. `m-auto` centres the
-          board inside the padded flex container when there is leftover space. */}
+      {/* Wrapper explicitly sized to padding + content (border-box), so it's
+          always exactly as big as its own overflow — never smaller. That
+          matters because a `min-width` floor alone lets the padded content
+          overflow the box, and CSS resolves `margin: auto` on an overflowing
+          flex child to 0 instead of centering it, breaking symmetry. Half-
+          viewport padding on every side gives the player enough room to pan
+          until any edge of the board reaches the centre of the screen. */}
       <div
-        className="flex min-h-full min-w-full"
+        className="flex box-border"
         style={{
+          width: Math.max(containerSize.width, panPadX * 2 + scaledWidth),
+          height: Math.max(containerSize.height, panPadY * 2 + scaledHeight),
           paddingLeft: panPadX,
           paddingRight: panPadX,
           paddingTop: panPadY,
@@ -308,9 +542,9 @@ export function Board({
               height: naturalHeight,
               transform: `scale(${scale})`,
             }}
-            onContextMenu={(e) => e.preventDefault()}
           >
             <div
+              ref={gridRef}
               role="grid"
               aria-label={`Nonogram board, ${rows} rows by ${cols} columns`}
               aria-rowcount={rows}
@@ -322,45 +556,66 @@ export function Board({
                 gap: `${gap}px`,
               }}
               onKeyDown={handleKeyDown}
+              onMouseDown={handleGridMouseDown}
+              onClick={handleGridClick}
+              onContextMenu={handleGridContextMenu}
             >
               {/* Corner spacer */}
               <div style={{ gridRow: 1, gridColumn: 1 }} />
 
-              {/* Column clue headers */}
+              {/* Column clue headers — one small chip per number, stacked. */}
               {clues.cols.map((clue, c) => (
                 <div
                   key={`col-${c}`}
                   aria-hidden
-                  className={cn(
-                    "flex flex-col items-center justify-end gap-0.5 font-mono leading-none",
-                    colDone[c]
-                      ? "text-[var(--color-muted)]/50 line-through decoration-2"
-                      : "text-[var(--color-fg-soft)]",
-                  )}
-                  style={{ gridRow: 1, gridColumn: c + 2, fontSize: clueFont }}
+                  className="flex flex-col items-center justify-end gap-[3px] pb-[3px]"
+                  style={{ gridRow: 1, gridColumn: c + 2 }}
                 >
                   {clue.map((n, i) => (
-                    <span key={i}>{n}</span>
+                    <span
+                      key={i}
+                      className={cn(
+                        "flex items-center justify-center rounded-[5px] font-mono leading-none transition-colors",
+                        colDone[c]
+                          ? "bg-transparent text-[var(--color-muted)]/50 line-through decoration-2"
+                          : "bg-[var(--color-surface-2)] text-[var(--color-fg-soft)]",
+                      )}
+                      style={{
+                        fontSize: clueFont,
+                        minWidth: clueFont * 1.5,
+                        padding: `${Math.max(1, clueFont * 0.18)}px ${Math.max(2, clueFont * 0.3)}px`,
+                      }}
+                    >
+                      {n}
+                    </span>
                   ))}
                 </div>
               ))}
 
-              {/* Row clue headers */}
+              {/* Row clue headers — one pill per row. */}
               {clues.rows.map((clue, r) => (
                 <div
                   key={`row-${r}`}
                   aria-hidden
-                  className={cn(
-                    "flex flex-row items-center justify-end gap-1.5 pr-1.5 font-mono leading-none",
-                    rowDone[r]
-                      ? "text-[var(--color-muted)]/50 line-through decoration-2"
-                      : "text-[var(--color-fg-soft)]",
-                  )}
-                  style={{ gridRow: r + 2, gridColumn: 1, fontSize: clueFont }}
+                  className="flex items-center justify-end pr-[3px]"
+                  style={{ gridRow: r + 2, gridColumn: 1 }}
                 >
-                  {clue.map((n, i) => (
-                    <span key={i}>{n}</span>
-                  ))}
+                  <span
+                    className={cn(
+                      "flex items-center justify-end gap-[6px] rounded-full font-mono leading-none transition-colors",
+                      rowDone[r]
+                        ? "bg-transparent text-[var(--color-muted)]/50 line-through decoration-2"
+                        : "bg-[var(--color-surface-2)] text-[var(--color-fg-soft)]",
+                    )}
+                    style={{
+                      fontSize: clueFont,
+                      padding: `${Math.max(2, clueFont * 0.28)}px ${Math.max(4, clueFont * 0.5)}px`,
+                    }}
+                  >
+                    {clue.map((n, i) => (
+                      <span key={i}>{n}</span>
+                    ))}
+                  </span>
                 </div>
               ))}
 
@@ -375,10 +630,8 @@ export function Board({
                       size={cellSize}
                       wrongFlash={wrongFlash ? wrongFlash[0] === r && wrongFlash[1] === c : false}
                       scanning={scanning}
-                      markMode={markMode}
-                      onFill={onFill}
-                      onMark={onMark}
-                      onCollect={onCollect}
+                      blockRight={(c + 1) % BLOCK_SIZE === 0 && c !== cols - 1}
+                      blockBottom={(r + 1) % BLOCK_SIZE === 0 && r !== rows - 1}
                     />
                   </div>
                 )),

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test"
-import { freshSession, makeActiveRound, makeSeedBoard, setPersisted } from "./_helpers"
+import { freshSession, makeActiveRound, makeSeedBoard } from "./_helpers"
 
 // Diagonal 3×3 solution with (0,0) and (1,1) already correctly filled — only
 // (2,2) remains hidden. Clicking it should trigger the win.

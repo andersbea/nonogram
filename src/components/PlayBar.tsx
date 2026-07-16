@@ -1,4 +1,4 @@
-import { Menu, MousePointer2, X } from "lucide-react"
+import { Heart, Menu, MousePointer2, X } from "lucide-react"
 import type { LevelConfig } from "@/game/types"
 import type { Palette } from "@/game/palette"
 import { formatMMSS } from "@/lib/format"
@@ -55,7 +55,7 @@ export function PlayBar({
           )}
           aria-label={`${mistakesLeft} mistakes remaining`}
         >
-          <X
+          <Heart
             className={cn(
               "h-3.5 w-3.5",
               mistakesLeft <= 0 ? "text-[var(--color-danger)]" : "text-[var(--color-fg-soft)]",
@@ -66,24 +66,33 @@ export function PlayBar({
         </div>
         <div className="font-mono tabular-nums text-sm text-[var(--color-fg)]">{formatMMSS(seconds)}</div>
 
+        {/* Fill/mark tool switch — a pill with a sliding thumb, matching the
+            two icons it toggles between. Drag paints whichever tool is active;
+            right-click (or shift/alt-click) always marks regardless. */}
         <button
           type="button"
           onClick={onToggleMarkMode}
           aria-pressed={markMode}
           aria-label={markMode ? "Switch to fill mode" : "Switch to mark mode"}
-          title={markMode ? "Tap = mark · long-press = fill" : "Tap = fill · long-press = mark"}
-          className={cn(
-            "inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-all active:scale-95",
-            markMode
-              ? "border-[var(--color-flag)]/60 bg-[color-mix(in_oklch,var(--color-flag)_22%,transparent)] text-[var(--color-flag)]"
-              : "border-[var(--color-border)] bg-[var(--color-surface)]/60 text-[var(--color-fg-soft)]",
-          )}
+          title={markMode ? "Drag to mark cells — tap to switch to fill" : "Drag to fill cells — tap to switch to mark"}
+          className="relative inline-flex h-9 w-[72px] shrink-0 items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]/60 p-0.5 transition-colors active:scale-[0.98]"
         >
-          {markMode ? (
-            <X className="h-4 w-4" strokeWidth={2.5} />
-          ) : (
-            <MousePointer2 className="h-4 w-4" />
-          )}
+          <span
+            aria-hidden
+            className="absolute h-8 w-8 rounded-full bg-[linear-gradient(135deg,var(--color-accent),var(--color-accent-2))] shadow-md transition-transform duration-200"
+            style={{ transform: `translateX(${markMode ? 36 : 0}px)` }}
+          />
+          <span className="relative z-10 flex w-8 items-center justify-center">
+            <MousePointer2
+              className={cn("h-4 w-4 transition-colors", !markMode ? "text-black" : "text-[var(--color-fg-soft)]")}
+            />
+          </span>
+          <span className="relative z-10 flex w-8 items-center justify-center">
+            <X
+              className={cn("h-4 w-4 transition-colors", markMode ? "text-black" : "text-[var(--color-fg-soft)]")}
+              strokeWidth={2.5}
+            />
+          </span>
         </button>
 
         <Button variant="outline" size="icon" onClick={onOpenMenu} aria-label="Open menu">

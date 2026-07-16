@@ -1,5 +1,63 @@
 import { type Page, expect } from "@playwright/test"
 
+/**
+ * Simulate a one-finger drag stroke across a sequence of "Cell r,c"-labelled
+ * buttons via native TouchEvents (touchstart on the first, touchmove through
+ * the rest, touchend on the last) — this is how the board's drag-to-paint
+ * gesture is driven on touch devices.
+ */
+export async function dragAcrossCells(page: Page, labels: string[]) {
+  const boxes = []
+  for (const label of labels) {
+    const box = await page.locator(`button[aria-label='${label}']`).boundingBox()
+    if (!box) throw new Error(`No bounding box for ${label}`)
+    boxes.push(box)
+  }
+  const dispatch = async (type: "touchstart" | "touchmove" | "touchend", x: number, y: number, sel: string) => {
+    await page.evaluate(
+      ([t, x, y, sel]) => {
+        const el = document.querySelector(sel as string) as HTMLElement
+        if (!el) throw new Error("missing")
+        const touch = new Touch({
+          identifier: 1,
+          target: el,
+          clientX: x as number,
+          clientY: y as number,
+          screenX: x as number,
+          screenY: y as number,
+          pageX: x as number,
+          pageY: y as number,
+          radiusX: 5,
+          radiusY: 5,
+          rotationAngle: 0,
+          force: 1,
+        })
+        el.dispatchEvent(
+          new TouchEvent(t as string, {
+            bubbles: true,
+            cancelable: true,
+            touches: t === "touchend" ? [] : [touch],
+            targetTouches: t === "touchend" ? [] : [touch],
+            changedTouches: [touch],
+          }),
+        )
+      },
+      [type, x, y, sel],
+    )
+  }
+  const cx = (b: { x: number; width: number }) => b.x + b.width / 2
+  const cy = (b: { y: number; height: number }) => b.y + b.height / 2
+  await dispatch("touchstart", cx(boxes[0]), cy(boxes[0]), `button[aria-label='${labels[0]}']`)
+  for (let i = 1; i < boxes.length; i++) {
+    await dispatch("touchmove", cx(boxes[i]), cy(boxes[i]), `button[aria-label='${labels[i]}']`)
+    await page.waitForTimeout(30)
+  }
+  const last = boxes[boxes.length - 1]
+  await dispatch("touchend", cx(last), cy(last), `button[aria-label='${labels[labels.length - 1]}']`)
+  // The paint queue drains one cell per animation frame — give it time to finish.
+  await page.waitForTimeout(labels.length * 40 + 200)
+}
+
 export interface CellCounts {
   hidden: number
   marked: number

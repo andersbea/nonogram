@@ -25,7 +25,6 @@ import type { Board as BoardT, LevelConfig, ModifierId } from "@/game/types"
 import { useGameTimer, SHAKE_DURATION_MS } from "@/hooks/useGameTimer"
 import { useLocalStorage } from "@/hooks/useLocalStorage"
 import { useTheme } from "@/hooks/useTheme"
-import { multiTouchRef } from "@/lib/touch-state"
 import { Board } from "./Board"
 import { ItemsBar } from "./ItemsBar"
 import { MenuSheet } from "./MenuSheet"
@@ -169,19 +168,6 @@ export function Game() {
   })
 
   // ── Side effects ─────────────────────────────────────────────────────────
-
-  // Track total active touches globally so cells skip long-press during pinch.
-  useEffect(() => {
-    const update = (e: TouchEvent) => { multiTouchRef.current = e.touches.length }
-    window.addEventListener("touchstart", update, { passive: true })
-    window.addEventListener("touchend",   update, { passive: true })
-    window.addEventListener("touchcancel", update, { passive: true })
-    return () => {
-      window.removeEventListener("touchstart", update)
-      window.removeEventListener("touchend",   update)
-      window.removeEventListener("touchcancel", update)
-    }
-  }, [])
 
   // Sync modifier gradient colours to CSS variables for the animated blobs.
   useEffect(() => {

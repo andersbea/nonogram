@@ -287,7 +287,7 @@ function MainView({
 
       <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
         <MousePointerClick className="h-3.5 w-3.5" />
-        <span>Tap to fill · long-press or right-click to mark · finishing a line auto-crosses it out.</span>
+        <span>Tap or drag to fill · switch tools to drag-mark · right-click always marks · finishing a line auto-crosses it out.</span>
       </div>
 
       <div className="mt-1 flex gap-2">

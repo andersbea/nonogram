@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test"
 import {
   dismissIntro,
+  dragAcrossCells,
   freshSession,
   makeActiveRound,
   makeSeedBoard,
@@ -57,59 +58,29 @@ test("filling a wrong cell flashes red, reverts to hidden, and costs a mistake",
   await expect(page.getByLabel("2 mistakes remaining")).toBeVisible()
 })
 
-test("long-press marks a cell — independent of mark-mode", async ({ page }) => {
+test("dragging a finger across cells in mark mode marks all of them in one stroke", async ({ page }) => {
   await page.goto("/")
   await dismissIntro(page)
-
-  async function longPress(label: string) {
-    const cell = page.locator(`button[aria-label='${label}']`)
-    const box = await cell.boundingBox()
-    if (!box) throw new Error(`No bounding box for ${label}`)
-    const cx = box.x + box.width / 2
-    const cy = box.y + box.height / 2
-    const dispatch = async (type: "touchstart" | "touchend") => {
-      await page.evaluate(
-        ([sel, x, y, t]) => {
-          const el = document.querySelector(sel as string) as HTMLElement
-          if (!el) throw new Error("missing")
-          const touch = new Touch({
-            identifier: 1,
-            target: el,
-            clientX: x as number,
-            clientY: y as number,
-            screenX: x as number,
-            screenY: y as number,
-            pageX: x as number,
-            pageY: y as number,
-            radiusX: 5,
-            radiusY: 5,
-            rotationAngle: 0,
-            force: 1,
-          })
-          el.dispatchEvent(
-            new TouchEvent(t as string, {
-              bubbles: true,
-              cancelable: true,
-              touches: t === "touchend" ? [] : [touch],
-              targetTouches: t === "touchend" ? [] : [touch],
-              changedTouches: [touch],
-            }),
-          )
-        },
-        [`button[aria-label='${label}']`, cx, cy, type],
-      )
-    }
-    await dispatch("touchstart")
-    await page.waitForTimeout(360) // > LONG_PRESS_MS
-    await dispatch("touchend")
-  }
-
-  await longPress("Cell 1,1")
-  await expect(page.getByLabel("Cell 1,1")).toHaveAttribute("data-cell-state", "marked")
-
   await page.getByLabel("Switch to mark mode").click()
-  await longPress("Cell 1,3")
-  await expect(page.getByLabel("Cell 1,3")).toHaveAttribute("data-cell-state", "marked")
+
+  await dragAcrossCells(page, ["Cell 1,1", "Cell 1,2", "Cell 1,3", "Cell 1,4"])
+  for (const label of ["Cell 1,1", "Cell 1,2", "Cell 1,3", "Cell 1,4"]) {
+    await expect(page.getByLabel(label)).toHaveAttribute("data-cell-state", "marked")
+  }
+})
+
+test("tapping a cell (no movement) marks only that one cell — no special hold behaviour", async ({ page }) => {
+  await page.goto("/")
+  await dismissIntro(page)
+  await page.getByLabel("Switch to mark mode").click()
+
+  // A tap — press and release with no movement — should mark only the one
+  // cell it landed on, whether the press was brief or held a while.
+  const cell = page.getByLabel("Cell 2,2")
+  await cell.click({ delay: 500 })
+  await expect(cell).toHaveAttribute("data-cell-state", "marked")
+  await expect(page.getByLabel("Cell 2,1")).toHaveAttribute("data-cell-state", "hidden")
+  await expect(page.getByLabel("Cell 2,3")).toHaveAttribute("data-cell-state", "hidden")
 })
 
 test("mark-mode toggle inverts tap behaviour", async ({ page }) => {
