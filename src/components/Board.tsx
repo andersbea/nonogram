@@ -615,6 +615,7 @@ export function Board({
                 <div
                   key={`col-${c}`}
                   aria-hidden
+                  data-col-header={c}
                   className="flex flex-col items-center justify-end gap-[3px] pb-[3px]"
                   style={{ gridRow: 1, gridColumn: c + 2 }}
                 >
@@ -644,6 +645,7 @@ export function Board({
                 <div
                   key={`row-${r}`}
                   aria-hidden
+                  data-row-header={r}
                   className="flex items-center justify-end pr-[3px]"
                   style={{ gridRow: r + 2, gridColumn: 1 }}
                 >
