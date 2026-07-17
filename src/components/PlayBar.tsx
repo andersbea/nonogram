@@ -79,8 +79,16 @@ export function PlayBar({
         >
           <span
             aria-hidden
-            className="absolute h-8 w-8 rounded-full bg-[linear-gradient(135deg,var(--color-accent),var(--color-accent-2))] shadow-md transition-transform duration-200"
-            style={{ transform: `translateX(${markMode ? 36 : 0}px)` }}
+            // Explicit top/left rather than relying on an absolutely
+            // positioned element's implicit static position (which fell
+            // through to whatever the flex layout algorithm happened to
+            // compute) — that was the source of the visible misalignment.
+            // The pill has 2px padding (p-0.5) on every side and its two
+            // w-8 (32px) icon spans sit flush against each other starting
+            // at that padding edge, so the 32px thumb aligns exactly over
+            // either icon at left = 2px (idle) or left = 2px + 32px (on).
+            className="absolute left-[2px] top-[2px] h-8 w-8 rounded-full bg-[linear-gradient(135deg,var(--color-accent),var(--color-accent-2))] shadow-md transition-transform duration-200"
+            style={{ transform: `translateX(${markMode ? 32 : 0}px)` }}
           />
           <span className="relative z-10 flex w-8 items-center justify-center">
             <MousePointer2

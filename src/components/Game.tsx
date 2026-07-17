@@ -194,7 +194,7 @@ export function Game() {
   // ── Derived state ────────────────────────────────────────────────────────
   const palette = useMemo(() => paletteFor(config.paletteSeed), [config.paletteSeed])
   const clues = useMemo(() => computeClues(board), [board])
-  const mistakesLeft = config.mistakeLimit - mistakesUsed
+  const mistakesLeft = Math.max(0, config.mistakeLimit - mistakesUsed)
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const pushFloat = useCallback((text: string) => {

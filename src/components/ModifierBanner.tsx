@@ -11,9 +11,14 @@ interface Props {
 export function ModifierBanner({ config, palette }: Props) {
   const Icon = getModifierIcon(config.modifier.icon)
   return (
-    <Card className="overflow-hidden border-[var(--color-accent)]/30">
+    <Card className="border-[var(--color-accent)]/30">
+      {/* Rounded to match the card rather than relying on `overflow-hidden`
+          on a `backdrop-blur` ancestor with an animated transform above it
+          (the menu sheet's slide-up) — that combination is a known mobile
+          WebKit/Chromium compositing bug that can clip descendant content
+          entirely instead of just cropping the gradient's corners. */}
       <div
-        className="flex items-center gap-3 p-3 sm:gap-4 sm:p-4"
+        className="flex items-center gap-3 rounded-2xl p-3 sm:gap-4 sm:p-4"
         style={{
           background: `linear-gradient(120deg, color-mix(in oklch, ${palette.a} 18%, transparent), color-mix(in oklch, ${palette.b} 12%, transparent) 60%, transparent)`,
         }}

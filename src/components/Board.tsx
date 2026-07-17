@@ -129,43 +129,60 @@ export function Board({
     return { r, c }
   }, [])
 
-  // Cells entered during a fast drag can be queued faster than React commits
-  // each fill/mark's state update. Calling onFill/onMark synchronously for
-  // several cells in the same tick is unsafe: each call reads `board` from
-  // the same pre-commit snapshot (via liveRef), so React's batched setState
-  // only keeps the *last* of several same-tick updates — earlier cells in
-  // the stroke would silently fail to paint. Queueing and draining one cell
-  // per animation frame guarantees each call sees the previous cell's
-  // already-committed result before deciding the next one.
-  const paintQueueRef = useRef<{ action: PaintAction; r: number; c: number }[]>([])
-  const paintingRef = useRef(false)
+  // Every board-mutating action — taps, right-clicks, and drag strokes —
+  // funnels through this one queue, drained one item per animation frame.
+  // That serialization is load-bearing, not just a drag-specific nicety:
+  // calling onFill/onMark synchronously for several cells in the same tick
+  // is unsafe, because each call reads `board`/`status`/etc. from the same
+  // pre-commit closure (via liveRef) — React's batched setState then only
+  // keeps the *last* of several same-tick updates. That silently drops
+  // earlier cells in a drag stroke, and for taps it's worse: a burst of
+  // fast clicks can each read the same stale mistake count, so the loss
+  // check race-conditions past its own threshold instead of stopping the
+  // round. One item per frame guarantees each call sees the previous
+  // item's already-committed result before deciding the next one.
+  type QueueItem =
+    | { kind: "fill"; r: number; c: number; forced: boolean }
+    | { kind: "mark"; r: number; c: number }
+    | { kind: "unmark"; r: number; c: number }
+    | { kind: "toggleMark"; r: number; c: number }
+    | { kind: "collect"; r: number; c: number }
 
-  const paint = useCallback((action: PaintAction, r: number, c: number) => {
-    paintQueueRef.current.push({ action, r, c })
-    if (paintingRef.current) return
-    paintingRef.current = true
+  const queueRef = useRef<QueueItem[]>([])
+  const drainingRef = useRef(false)
+
+  const enqueue = useCallback((item: QueueItem) => {
+    queueRef.current.push(item)
+    if (drainingRef.current) return
+    drainingRef.current = true
 
     // A hoisted local function (rather than a self-referencing const) so it
     // can recurse via requestAnimationFrame without a temporal-dead-zone
     // self-reference in its own initializer.
     function drainOne() {
-      const next = paintQueueRef.current.shift()
+      const next = queueRef.current.shift()
       if (!next) {
-        paintingRef.current = false
+        drainingRef.current = false
         return
       }
-      const { board: b, onFill: fill, onMark: mark } = liveRef.current
+      const { board: b, onFill: fill, onMark: mark, onCollect: collect } = liveRef.current
       const cell = b[next.r]?.[next.c]
       if (cell) {
-        if (next.action === "fill") {
-          // Drag-fill only paints cells that are actually correct, so a
-          // sloppy swipe across a run can't rack up a cascade of mistakes —
-          // a single deliberate tap can still be wrong (click path handles that).
-          if (cell.state === "hidden" && cell.solution) fill(next.r, next.c)
-        } else if (next.action === "mark") {
+        if (next.kind === "fill") {
+          // Drag-fill (forced: false) only paints cells that are actually
+          // correct, so a sloppy swipe across a run can't rack up a cascade
+          // of mistakes. A deliberate tap (forced: true) always attempts the
+          // fill — it can still be wrong; Game.tsx's handleFill is what
+          // charges the mistake and checks the loss threshold.
+          if (cell.state === "hidden" && (next.forced || cell.solution)) fill(next.r, next.c)
+        } else if (next.kind === "mark") {
           if (cell.state === "hidden") mark(next.r, next.c)
-        } else if (next.action === "unmark") {
+        } else if (next.kind === "unmark") {
           if (cell.state === "marked") mark(next.r, next.c)
+        } else if (next.kind === "toggleMark") {
+          if (cell.state !== "filled") mark(next.r, next.c)
+        } else if (next.kind === "collect") {
+          if (cell.state === "filled" && cell.item) collect(next.r, next.c)
         }
       }
       requestAnimationFrame(drainOne)
@@ -184,24 +201,33 @@ export function Board({
     }
   }, [])
 
-  const continueDrag = useCallback((r: number, c: number) => {
-    const session = dragRef.current
-    if (!session) return false
-    if (r === session.originR && c === session.originC && !session.dragging) return false
-    if (!session.dragging) {
-      session.dragging = true
-      if (session.action) {
-        session.visited.add(`${session.originR}-${session.originC}`)
-        paint(session.action, session.originR, session.originC)
+  const continueDrag = useCallback(
+    (r: number, c: number) => {
+      const session = dragRef.current
+      if (!session) return false
+      if (r === session.originR && c === session.originC && !session.dragging) return false
+      const enqueueDragCell = (dr: number, dc: number) => {
+        if (!session.action) return
+        enqueue(
+          session.action === "fill"
+            ? { kind: "fill", r: dr, c: dc, forced: false }
+            : { kind: session.action, r: dr, c: dc },
+        )
       }
-    }
-    const key = `${r}-${c}`
-    if (session.action && !session.visited.has(key)) {
-      session.visited.add(key)
-      paint(session.action, r, c)
-    }
-    return true
-  }, [paint])
+      if (!session.dragging) {
+        session.dragging = true
+        session.visited.add(`${session.originR}-${session.originC}`)
+        enqueueDragCell(session.originR, session.originC)
+      }
+      const key = `${r}-${c}`
+      if (session.action && !session.visited.has(key)) {
+        session.visited.add(key)
+        enqueueDragCell(r, c)
+      }
+      return true
+    },
+    [enqueue],
+  )
 
   // Touch: a stroke that starts on a cell always paints, never pans — cells
   // are `touch-action:none` so the browser never claims the gesture for
@@ -275,25 +301,31 @@ export function Board({
 
   // A tap/click (no drag) — also the path for keyboard Enter/Space
   // activation, which fires `click` directly with no preceding mousedown.
-  const handleGridClick = useCallback(
-    (e: React.MouseEvent) => {
-      const btn = (e.target as HTMLElement).closest("button[data-row]") as HTMLElement | null
-      if (!btn) return
-      const r = Number(btn.getAttribute("data-row"))
-      const c = Number(btn.getAttribute("data-col"))
-      if (Number.isNaN(r) || Number.isNaN(c)) return
-      const { board: b, onFill: fill, onMark: mark, onCollect: collect } = liveRef.current
-      if (e.shiftKey || e.altKey) {
-        mark(r, c)
-        return
-      }
-      const action = actionForCell(b, r, c, liveRef.current.markMode)
-      if (action === "collect") collect(r, c)
-      else if (action === "fill") fill(r, c) // deliberate single tap — full mistake risk allowed
-      else if (action === "mark" || action === "unmark") mark(r, c)
-    },
-    [],
-  )
+  //
+  // Handled directly rather than through `enqueue`: each discrete click is
+  // its own browser event/task, and React already flushes state between
+  // separate events, so there's no same-tick staleness to guard against
+  // here (unlike a drag stroke, where one `touchmove` can cross several
+  // cells inside a single synchronous handler call). Routing taps through
+  // the rAF-driven queue was tried and reverted — `requestAnimationFrame`
+  // callbacks are throttled to nothing on a backgrounded/unfocused tab, so
+  // a tap could end up silently doing nothing.
+  const handleGridClick = useCallback((e: React.MouseEvent) => {
+    const btn = (e.target as HTMLElement).closest("button[data-row]") as HTMLElement | null
+    if (!btn) return
+    const r = Number(btn.getAttribute("data-row"))
+    const c = Number(btn.getAttribute("data-col"))
+    if (Number.isNaN(r) || Number.isNaN(c)) return
+    const { board: b, onFill: fill, onMark: mark, onCollect: collect } = liveRef.current
+    if (e.shiftKey || e.altKey) {
+      mark(r, c)
+      return
+    }
+    const action = actionForCell(b, r, c, liveRef.current.markMode)
+    if (action === "collect") collect(r, c)
+    else if (action === "fill") fill(r, c) // deliberate single tap — full mistake risk allowed
+    else if (action === "mark" || action === "unmark") mark(r, c)
+  }, [])
 
   const handleGridContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -553,7 +585,6 @@ export function Board({
               style={{
                 gridTemplateColumns: `${rowHeaderW}px repeat(${cols}, ${cellSize}px)`,
                 gridTemplateRows: `${colHeaderH}px repeat(${rows}, ${cellSize}px)`,
-                gap: `${gap}px`,
               }}
               onKeyDown={handleKeyDown}
               onMouseDown={handleGridMouseDown}
@@ -630,6 +661,8 @@ export function Board({
                       size={cellSize}
                       wrongFlash={wrongFlash ? wrongFlash[0] === r && wrongFlash[1] === c : false}
                       scanning={scanning}
+                      showRight={c !== cols - 1}
+                      showBottom={r !== rows - 1}
                       blockRight={(c + 1) % BLOCK_SIZE === 0 && c !== cols - 1}
                       blockBottom={(r + 1) % BLOCK_SIZE === 0 && r !== rows - 1}
                     />
