@@ -208,11 +208,19 @@ export function Board({
       if (r === session.originR && c === session.originC && !session.dragging) return false
       const enqueueDragCell = (dr: number, dc: number) => {
         if (!session.action) return
-        enqueue(
-          session.action === "fill"
-            ? { kind: "fill", r: dr, c: dc, forced: false }
-            : { kind: session.action, r: dr, c: dc },
-        )
+        if (session.action === "fill") {
+          enqueue({ kind: "fill", r: dr, c: dc, forced: false })
+          return
+        }
+        enqueue({ kind: session.action, r: dr, c: dc })
+        // Marking is otherwise free, but a sloppy swipe shouldn't blast an
+        // X across a whole run once it's crossed into a cell that's
+        // actually part of the solution. That one mark still lands — it's
+        // already enqueued above — but the stroke halts there, so nothing
+        // further along the same drag gets marked.
+        if (session.action === "mark" && liveRef.current.board[dr]?.[dc]?.solution) {
+          session.action = null
+        }
       }
       if (!session.dragging) {
         session.dragging = true

@@ -83,7 +83,7 @@ function CellInner({
 
       {isMarked && (
         <X
-          className="cell-pop text-[var(--color-fg-soft)]"
+          className="text-[var(--color-fg-soft)]"
           style={{ width: Math.max(12, size * 0.4), height: Math.max(12, size * 0.4) }}
           strokeWidth={2.5}
         />

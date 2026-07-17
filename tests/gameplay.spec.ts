@@ -59,14 +59,41 @@ test("filling a wrong cell flashes red, reverts to hidden, and costs a mistake",
 })
 
 test("dragging a finger across cells in mark mode marks all of them in one stroke", async ({ page }) => {
+  // None of row 0's cells are part of the solution, so the drag-halt-on-
+  // solution-cell behaviour (tested separately below) never kicks in here.
+  const board = makeSeedBoard(4, 4, (r) => ({ solution: r === 3 }))
+  await page.addInitScript((round) => {
+    window.localStorage.setItem("ng.activeRound", JSON.stringify(round))
+  }, makeActiveRound({ rows: 4, cols: 4, fillTarget: 4, board, status: "playing" }))
   await page.goto("/")
-  await dismissIntro(page)
   await page.getByLabel("Switch to mark mode").click()
 
   await dragAcrossCells(page, ["Cell 1,1", "Cell 1,2", "Cell 1,3", "Cell 1,4"])
   for (const label of ["Cell 1,1", "Cell 1,2", "Cell 1,3", "Cell 1,4"]) {
     await expect(page.getByLabel(label)).toHaveAttribute("data-cell-state", "marked")
   }
+})
+
+test("dragging in mark mode halts the stroke at the first cell that's actually part of the solution", async ({ page }) => {
+  // Row 0 solution: [false, false, true, false] — board[0][2] (Cell 1,3) is
+  // a real solution cell hiding in the middle of the drag path.
+  const board = makeSeedBoard(4, 4, () => ({ solution: false }))
+  board[0][2].solution = true
+  await page.addInitScript((round) => {
+    window.localStorage.setItem("ng.activeRound", JSON.stringify(round))
+  }, makeActiveRound({ rows: 4, cols: 4, fillTarget: 1, board, status: "playing" }))
+  await page.goto("/")
+  await page.getByLabel("Switch to mark mode").click()
+
+  await dragAcrossCells(page, ["Cell 1,1", "Cell 1,2", "Cell 1,3", "Cell 1,4"])
+
+  await expect(page.getByLabel("Cell 1,1")).toHaveAttribute("data-cell-state", "marked")
+  await expect(page.getByLabel("Cell 1,2")).toHaveAttribute("data-cell-state", "marked")
+  // The offending cell itself still gets marked (visible feedback that it
+  // happened) ...
+  await expect(page.getByLabel("Cell 1,3")).toHaveAttribute("data-cell-state", "marked")
+  // ...but nothing further along the same stroke does.
+  await expect(page.getByLabel("Cell 1,4")).toHaveAttribute("data-cell-state", "hidden")
 })
 
 test("tapping a cell (no movement) marks only that one cell — no special hold behaviour", async ({ page }) => {
