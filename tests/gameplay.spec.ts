@@ -96,6 +96,27 @@ test("dragging in mark mode halts the stroke at the first cell that's actually p
   await expect(page.getByLabel("Cell 1,4")).toHaveAttribute("data-cell-state", "hidden")
 })
 
+test("a fresh swipe over an already-marked solution cell doesn't halt — it's a no-op, not a new mistake", async ({ page }) => {
+  // Same layout as above, but Cell 1,3 is already marked from an earlier
+  // stroke by the time this drag runs. Re-swiping across it shouldn't
+  // change anything about it — nor should it stop the new stroke from
+  // reaching cells further along the row.
+  const board = makeSeedBoard(4, 4, () => ({ solution: false }))
+  board[0][2].solution = true
+  board[0][2].state = "marked"
+  await page.addInitScript((round) => {
+    window.localStorage.setItem("ng.activeRound", JSON.stringify(round))
+  }, makeActiveRound({ rows: 4, cols: 4, fillTarget: 1, board, status: "playing" }))
+  await page.goto("/")
+  await page.getByLabel("Switch to mark mode").click()
+
+  await dragAcrossCells(page, ["Cell 1,1", "Cell 1,2", "Cell 1,3", "Cell 1,4"])
+
+  for (const label of ["Cell 1,1", "Cell 1,2", "Cell 1,3", "Cell 1,4"]) {
+    await expect(page.getByLabel(label)).toHaveAttribute("data-cell-state", "marked")
+  }
+})
+
 test("tapping a cell (no movement) marks only that one cell — no special hold behaviour", async ({ page }) => {
   await page.goto("/")
   await dismissIntro(page)

@@ -212,13 +212,21 @@ export function Board({
           enqueue({ kind: "fill", r: dr, c: dc, forced: false })
           return
         }
+        const cell = liveRef.current.board[dr]?.[dc]
         enqueue({ kind: session.action, r: dr, c: dc })
         // Marking is otherwise free, but a sloppy swipe shouldn't blast an
         // X across a whole run once it's crossed into a cell that's
         // actually part of the solution. That one mark still lands — it's
         // already enqueued above — but the stroke halts there, so nothing
         // further along the same drag gets marked.
-        if (session.action === "mark" && liveRef.current.board[dr]?.[dc]?.solution) {
+        //
+        // Only halt on a *new* incorrect mark — a cell that's already
+        // marked (from earlier in this stroke, an earlier stroke, or a
+        // tap) is a no-op either way, so swiping back over it shouldn't
+        // cancel the rest of the drag. That matters once a row is mostly
+        // marked already and the stroke just needs to reach a few
+        // remaining hidden cells past it.
+        if (session.action === "mark" && cell?.state === "hidden" && cell.solution) {
           session.action = null
         }
       }
