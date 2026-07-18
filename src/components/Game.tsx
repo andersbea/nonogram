@@ -32,6 +32,7 @@ import { Overlay } from "./Overlay"
 import { PlayBar } from "./PlayBar"
 import { ReadyOverlay } from "./ReadyOverlay"
 import { SwapDialog } from "./SwapDialog"
+import { ToolToggle } from "./ToolToggle"
 
 // ─── Timing constants ─────────────────────────────────────────────────────────
 
@@ -465,8 +466,6 @@ export function Game() {
         palette={palette}
         mistakesLeft={mistakesLeft}
         seconds={seconds}
-        markMode={markMode}
-        onToggleMarkMode={() => setMarkMode((v) => !v)}
         onOpenMenu={() => setMenuOpen(true)}
       />
 
@@ -513,6 +512,8 @@ export function Game() {
           </div>
         )}
       </div>
+
+      <ToolToggle markMode={markMode} onToggleMarkMode={() => setMarkMode((v) => !v)} />
 
       <MenuSheet
         open={menuOpen}

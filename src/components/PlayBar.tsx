@@ -1,4 +1,4 @@
-import { Heart, Menu, MousePointer2, X } from "lucide-react"
+import { Heart, Menu } from "lucide-react"
 import type { LevelConfig } from "@/game/types"
 import type { Palette } from "@/game/palette"
 import { formatMMSS } from "@/lib/format"
@@ -10,8 +10,6 @@ interface Props {
   palette: Palette
   mistakesLeft: number
   seconds: number
-  markMode: boolean
-  onToggleMarkMode: () => void
   onOpenMenu: () => void
 }
 
@@ -20,8 +18,6 @@ export function PlayBar({
   palette,
   mistakesLeft,
   seconds,
-  markMode,
-  onToggleMarkMode,
   onOpenMenu,
 }: Props) {
   return (
@@ -65,43 +61,6 @@ export function PlayBar({
           {mistakesLeft}
         </div>
         <div className="font-mono tabular-nums text-sm text-[var(--color-fg)]">{formatMMSS(seconds)}</div>
-
-        {/* Fill/mark tool switch — a pill with a sliding thumb, matching the
-            two icons it toggles between. Drag paints whichever tool is active;
-            right-click (or shift/alt-click) always marks regardless. */}
-        <button
-          type="button"
-          onClick={onToggleMarkMode}
-          aria-pressed={markMode}
-          aria-label={markMode ? "Switch to fill mode" : "Switch to mark mode"}
-          title={markMode ? "Drag to mark cells — tap to switch to fill" : "Drag to fill cells — tap to switch to mark"}
-          className="relative inline-flex h-9 w-[72px] shrink-0 items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]/60 p-0.5 transition-colors active:scale-[0.98]"
-        >
-          <span
-            aria-hidden
-            // Explicit top/left rather than relying on an absolutely
-            // positioned element's implicit static position (which fell
-            // through to whatever the flex layout algorithm happened to
-            // compute) — that was the source of the visible misalignment.
-            // The pill has 2px padding (p-0.5) on every side and its two
-            // w-8 (32px) icon spans sit flush against each other starting
-            // at that padding edge, so the 32px thumb aligns exactly over
-            // either icon at left = 2px (idle) or left = 2px + 32px (on).
-            className="absolute left-[2px] top-[2px] h-8 w-8 rounded-full bg-[linear-gradient(135deg,var(--color-accent),var(--color-accent-2))] shadow-md transition-transform duration-200"
-            style={{ transform: `translateX(${markMode ? 32 : 0}px)` }}
-          />
-          <span className="relative z-10 flex w-8 items-center justify-center">
-            <MousePointer2
-              className={cn("h-4 w-4 transition-colors", !markMode ? "text-black" : "text-[var(--color-fg-soft)]")}
-            />
-          </span>
-          <span className="relative z-10 flex w-8 items-center justify-center">
-            <X
-              className={cn("h-4 w-4 transition-colors", markMode ? "text-black" : "text-[var(--color-fg-soft)]")}
-              strokeWidth={2.5}
-            />
-          </span>
-        </button>
 
         <Button variant="outline" size="icon" onClick={onOpenMenu} aria-label="Open menu">
           <Menu className="h-4 w-4" />
