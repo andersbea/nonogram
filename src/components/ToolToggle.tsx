@@ -7,21 +7,21 @@ interface Props {
 }
 
 /**
- * Fill/mark tool switch. Lives in its own bar below the board (rather than
- * up in the PlayBar) so it sits within comfortable one-thumb reach on a
- * phone. Drag paints whichever tool is active; right-click (or
- * shift/alt-click) always marks regardless.
+ * Fill/mark tool switch. Free-floating below the board (rather than boxed
+ * in a bar, and rather than up in the PlayBar) so it sits within
+ * comfortable one-thumb reach on a phone. Drag paints whichever tool is
+ * active; right-click (or shift/alt-click) always marks regardless.
  */
 export function ToolToggle({ markMode, onToggleMarkMode }: Props) {
   return (
-    <div className="flex items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]/70 px-3 py-2 backdrop-blur-xl">
+    <div className="flex items-center justify-center">
       <button
         type="button"
         onClick={onToggleMarkMode}
         aria-pressed={markMode}
         aria-label={markMode ? "Switch to fill mode" : "Switch to mark mode"}
         title={markMode ? "Drag to mark cells — tap to switch to fill" : "Drag to fill cells — tap to switch to mark"}
-        className="relative inline-flex h-12 w-24 shrink-0 items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/60 p-1 transition-colors active:scale-[0.98]"
+        className="relative inline-flex h-12 w-24 shrink-0 items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/80 p-1 shadow-lg backdrop-blur-xl transition-colors active:scale-[0.98]"
       >
         {/* Explicit top/left rather than an absolutely positioned element's
             implicit static position — the pill has 4px padding (p-1) on
