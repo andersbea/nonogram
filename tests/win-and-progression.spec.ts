@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test"
-import { freshSession, makeActiveRound, makeSeedBoard } from "./_helpers"
+import { dragAcrossCells, freshSession, makeActiveRound, makeSeedBoard } from "./_helpers"
 
 // Diagonal 3×3 solution with (0,0) and (1,1) already correctly filled — only
 // (2,2) remains hidden. Clicking it should trigger the win.
@@ -101,6 +101,37 @@ test("Second Chance auto-cancels a wrong fill instead of charging a mistake", as
   await expect(page.getByRole("status")).toContainText("Second Chance", { timeout: 2000 })
   // No mistake was charged — the counter is still at its starting value.
   await expect(page.getByLabel("3 mistakes remaining")).toBeVisible()
+
+  const items = await page.evaluate(() => JSON.parse(window.localStorage.getItem("ng.items") ?? "[]"))
+  expect(items).not.toContain("undo")
+})
+
+test("Second Chance also auto-cancels a wrong fill hit mid-drag stroke", async ({ page }) => {
+  // Row 0 solution: [true, false, false, true] — clue [1,1]. Filling just
+  // Cell 1,1 doesn't satisfy that clue on its own (it needs both runs), so
+  // the rest of the row stays genuinely hidden instead of being
+  // auto-crossed-out — which would happen instantly if the row's clue
+  // were just [1], stepping on this test before the drag even gets there.
+  const board = makeSeedBoard(4, 4, () => ({ solution: false }))
+  board[0][0].solution = true
+  board[0][3].solution = true
+  await page.addInitScript((round) => {
+    window.localStorage.setItem("ng.activeRound", JSON.stringify(round))
+    window.localStorage.setItem("ng.items", JSON.stringify(["undo"]))
+    window.localStorage.setItem("ng.itemLocks", JSON.stringify([false]))
+  }, makeActiveRound({ rows: 4, cols: 4, fillTarget: 2, mistakeLimit: 3, board, status: "playing" }))
+  await page.goto("/")
+
+  await dragAcrossCells(page, ["Cell 1,1", "Cell 1,2", "Cell 1,3"])
+
+  await expect(page.getByLabel("Cell 1,1")).toHaveAttribute("data-cell-state", "filled")
+  await expect(page.getByRole("status")).toContainText("Second Chance", { timeout: 2000 })
+  // No mistake was charged for the wrong cell the stroke landed on, and the
+  // absorbed wrong fill still reverts to hidden like any wrong fill would.
+  await expect(page.getByLabel("3 mistakes remaining")).toBeVisible()
+  await expect(page.getByLabel("Cell 1,2")).toHaveAttribute("data-cell-state", "hidden")
+  // The stroke still halted at the wrong cell — Cell 1,3 was never reached.
+  await expect(page.getByLabel("Cell 1,3")).toHaveAttribute("data-cell-state", "hidden")
 
   const items = await page.evaluate(() => JSON.parse(window.localStorage.getItem("ng.items") ?? "[]"))
   expect(items).not.toContain("undo")
