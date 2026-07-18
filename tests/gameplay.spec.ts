@@ -58,6 +58,31 @@ test("filling a wrong cell flashes red, reverts to hidden, and costs a mistake",
   await expect(page.getByLabel("2 mistakes remaining")).toBeVisible()
 })
 
+test("dragging a finger across cells in fill mode fills correct cells, costs a mistake on a wrong one, and halts there", async ({ page }) => {
+  // Row 0 solution: [true, true, false, true] — Cell 1,3 (board[0][2]) is
+  // NOT part of the solution, sitting between two correct cells and a
+  // fourth correct cell the stroke should never reach.
+  const board = makeSeedBoard(4, 4, () => ({ solution: false }))
+  board[0][0].solution = true
+  board[0][1].solution = true
+  board[0][3].solution = true
+  await page.addInitScript((round) => {
+    window.localStorage.setItem("ng.activeRound", JSON.stringify(round))
+  }, makeActiveRound({ rows: 4, cols: 4, fillTarget: 3, board, status: "playing" }))
+  await page.goto("/")
+
+  await dragAcrossCells(page, ["Cell 1,1", "Cell 1,2", "Cell 1,3", "Cell 1,4"])
+
+  await expect(page.getByLabel("Cell 1,1")).toHaveAttribute("data-cell-state", "filled")
+  await expect(page.getByLabel("Cell 1,2")).toHaveAttribute("data-cell-state", "filled")
+  // The wrong fill attempt still lands — it costs the mistake below — but
+  // reverts back to hidden just like a wrong tap would.
+  await expect(page.getByLabel("Cell 1,3")).toHaveAttribute("data-cell-state", "hidden")
+  // Nothing further along the same stroke gets touched.
+  await expect(page.getByLabel("Cell 1,4")).toHaveAttribute("data-cell-state", "hidden")
+  await expect(page.getByLabel("2 mistakes remaining")).toBeVisible()
+})
+
 test("dragging a finger across cells in mark mode marks all of them in one stroke", async ({ page }) => {
   // None of row 0's cells are part of the solution, so the drag-halt-on-
   // solution-cell behaviour (tested separately below) never kicks in here.

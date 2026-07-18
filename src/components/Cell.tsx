@@ -63,8 +63,10 @@ function CellInner({
       }}
       className={cn(
         "relative flex select-none items-center justify-center transition-colors duration-150",
-        !isFilled && !isMarked && "bg-[var(--color-surface-2)]",
-        isMarked && "bg-[var(--color-surface-2)]/60",
+        // Marked cells share hidden's background exactly — the X glyph
+        // alone signals "marked" — so there's no color value to transition
+        // and a mark always pops in instantly, drag stroke or not.
+        !isFilled && "bg-[var(--color-surface-2)]",
         isFilled && "bg-[var(--color-fg)] cell-reveal",
         wrongFlash && "bg-[var(--color-danger)]/40",
       )}

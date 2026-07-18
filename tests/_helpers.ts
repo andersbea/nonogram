@@ -54,8 +54,8 @@ export async function dragAcrossCells(page: Page, labels: string[]) {
   }
   const last = boxes[boxes.length - 1]
   await dispatch("touchend", cx(last), cy(last), `button[aria-label='${labels[labels.length - 1]}']`)
-  // The paint queue drains one cell per animation frame — give it time to finish.
-  await page.waitForTimeout(labels.length * 40 + 200)
+  // Each cell is painted synchronously (via flushSync) as its touchmove is
+  // dispatched above — no queued/staggered draining to wait out here.
 }
 
 export interface CellCounts {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 import { Minimize2 } from "lucide-react"
 import { colStates, lineSatisfied, rowStates } from "@/game/engine"
 import type { Board as BoardT, Clues } from "@/game/types"
@@ -130,64 +131,52 @@ export function Board({
   }, [])
 
   // Every board-mutating action — taps, right-clicks, and drag strokes —
-  // funnels through this one queue, drained one item per animation frame.
-  // That serialization is load-bearing, not just a drag-specific nicety:
-  // calling onFill/onMark synchronously for several cells in the same tick
-  // is unsafe, because each call reads `board`/`status`/etc. from the same
-  // pre-commit closure (via liveRef) — React's batched setState then only
-  // keeps the *last* of several same-tick updates. That silently drops
-  // earlier cells in a drag stroke, and for taps it's worse: a burst of
-  // fast clicks can each read the same stale mistake count, so the loss
-  // check race-conditions past its own threshold instead of stopping the
-  // round. One item per frame guarantees each call sees the previous
-  // item's already-committed result before deciding the next one.
+  // funnels through this one dispatcher. That's load-bearing, not just a
+  // drag-specific nicety: calling onFill/onMark synchronously for several
+  // cells in the same tick is unsafe, because each call reads
+  // `board`/`status`/etc. from the same pre-commit closure (via liveRef) —
+  // React's batched setState then only keeps the *last* of several
+  // same-tick updates. That silently drops earlier cells in a drag
+  // stroke, and for fills it's worse: a burst of fast fills can each read
+  // the same stale mistake count, so the loss check race-conditions past
+  // its own threshold instead of stopping the round.
+  //
+  // `flushSync` forces React to commit (and this component to re-render,
+  // refreshing `liveRef.current`) before returning, so each call in a
+  // touchmove handler sees the *previous* call's already-committed result
+  // before deciding the next one — without pacing dispatches one per
+  // animation frame, which visibly staggered a fast drag stroke's paint
+  // instead of it appearing instantly under the finger.
   type QueueItem =
-    | { kind: "fill"; r: number; c: number; forced: boolean }
+    | { kind: "fill"; r: number; c: number }
     | { kind: "mark"; r: number; c: number }
     | { kind: "unmark"; r: number; c: number }
     | { kind: "toggleMark"; r: number; c: number }
     | { kind: "collect"; r: number; c: number }
 
-  const queueRef = useRef<QueueItem[]>([])
-  const drainingRef = useRef(false)
-
-  const enqueue = useCallback((item: QueueItem) => {
-    queueRef.current.push(item)
-    if (drainingRef.current) return
-    drainingRef.current = true
-
-    // A hoisted local function (rather than a self-referencing const) so it
-    // can recurse via requestAnimationFrame without a temporal-dead-zone
-    // self-reference in its own initializer.
-    function drainOne() {
-      const next = queueRef.current.shift()
-      if (!next) {
-        drainingRef.current = false
-        return
-      }
+  const dispatch = useCallback((item: QueueItem) => {
+    flushSync(() => {
       const { board: b, onFill: fill, onMark: mark, onCollect: collect } = liveRef.current
-      const cell = b[next.r]?.[next.c]
-      if (cell) {
-        if (next.kind === "fill") {
-          // Drag-fill (forced: false) only paints cells that are actually
-          // correct, so a sloppy swipe across a run can't rack up a cascade
-          // of mistakes. A deliberate tap (forced: true) always attempts the
-          // fill — it can still be wrong; Game.tsx's handleFill is what
-          // charges the mistake and checks the loss threshold.
-          if (cell.state === "hidden" && (next.forced || cell.solution)) fill(next.r, next.c)
-        } else if (next.kind === "mark") {
-          if (cell.state === "hidden") mark(next.r, next.c)
-        } else if (next.kind === "unmark") {
-          if (cell.state === "marked") mark(next.r, next.c)
-        } else if (next.kind === "toggleMark") {
-          if (cell.state !== "filled") mark(next.r, next.c)
-        } else if (next.kind === "collect") {
-          if (cell.state === "filled" && cell.item) collect(next.r, next.c)
-        }
+      const cell = b[item.r]?.[item.c]
+      if (!cell) return
+      if (item.kind === "fill") {
+        // Drag-fill and a deliberate tap both always attempt the fill —
+        // it can still be wrong; Game.tsx's handleFill is what charges the
+        // mistake and checks the loss threshold. (continueDrag halts the
+        // rest of a drag stroke after a wrong fill so one sloppy swipe
+        // can't rack up several mistakes in a row — see below — but the
+        // wrong fill it lands on is never silently skipped.)
+        if (cell.state === "hidden") fill(item.r, item.c)
+      } else if (item.kind === "mark") {
+        if (cell.state === "hidden") mark(item.r, item.c)
+      } else if (item.kind === "unmark") {
+        if (cell.state === "marked") mark(item.r, item.c)
+      } else if (item.kind === "toggleMark") {
+        if (cell.state !== "filled") mark(item.r, item.c)
+      } else if (item.kind === "collect") {
+        if (cell.state === "filled" && cell.item) collect(item.r, item.c)
       }
-      requestAnimationFrame(drainOne)
-    }
-    requestAnimationFrame(drainOne)
+    })
   }, [])
 
   const beginDrag = useCallback((r: number, c: number) => {
@@ -206,18 +195,27 @@ export function Board({
       const session = dragRef.current
       if (!session) return false
       if (r === session.originR && c === session.originC && !session.dragging) return false
-      const enqueueDragCell = (dr: number, dc: number) => {
+      const paintDragCell = (dr: number, dc: number) => {
         if (!session.action) return
+        // Read the cell's pre-dispatch state — dispatch() mutates it
+        // synchronously (via flushSync), so this is the only point where
+        // "was this cell actually correct/already marked" can still be
+        // checked.
+        const cell = liveRef.current.board[dr]?.[dc]
+        dispatch({ kind: session.action, r: dr, c: dc })
         if (session.action === "fill") {
-          enqueue({ kind: "fill", r: dr, c: dc, forced: false })
+          // A sloppy swipe shouldn't rack up a cascade of mistakes once it
+          // crosses into a wrong cell — that one fill attempt still lands
+          // (and costs the mistake, exactly like a deliberate tap would;
+          // see the comment on `dispatch` above), but the stroke halts
+          // there instead of continuing to attempt further cells.
+          if (cell?.state === "hidden" && !cell.solution) session.action = null
           return
         }
-        const cell = liveRef.current.board[dr]?.[dc]
-        enqueue({ kind: session.action, r: dr, c: dc })
         // Marking is otherwise free, but a sloppy swipe shouldn't blast an
         // X across a whole run once it's crossed into a cell that's
         // actually part of the solution. That one mark still lands — it's
-        // already enqueued above — but the stroke halts there, so nothing
+        // already dispatched above — but the stroke halts there, so nothing
         // further along the same drag gets marked.
         //
         // Only halt on a *new* incorrect mark — a cell that's already
@@ -233,16 +231,16 @@ export function Board({
       if (!session.dragging) {
         session.dragging = true
         session.visited.add(`${session.originR}-${session.originC}`)
-        enqueueDragCell(session.originR, session.originC)
+        paintDragCell(session.originR, session.originC)
       }
       const key = `${r}-${c}`
       if (session.action && !session.visited.has(key)) {
         session.visited.add(key)
-        enqueueDragCell(r, c)
+        paintDragCell(r, c)
       }
       return true
     },
-    [enqueue],
+    [dispatch],
   )
 
   // Touch: a stroke that starts on a cell always paints, never pans — cells
