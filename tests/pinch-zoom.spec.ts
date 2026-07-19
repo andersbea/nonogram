@@ -110,3 +110,28 @@ test("reset-zoom chip appears after pinch and snaps back to scale 1", async ({ p
   })
   expect(scale).toBeCloseTo(1, 2)
 })
+
+test("pinch anchors the zoom at the pinch center — the same cell stays under the fingers", async ({ page }) => {
+  await page.goto("/")
+  await dismissIntro(page)
+
+  const cellUnderCenter = async () =>
+    page.evaluate(() => {
+      const el = document.querySelector(".overflow-auto") as HTMLElement
+      const rect = el.getBoundingClientRect()
+      const cell = document
+        .elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        ?.closest("button[data-row]")
+      return cell?.getAttribute("aria-label") ?? null
+    })
+
+  const before = await cellUnderCenter()
+  expect(before).not.toBeNull()
+  await pinch(page, "in")
+  // The pinch helper's synthetic gesture is centered on the same point, so
+  // whichever cell was under it before should still be under it after —
+  // that's the whole point of anchoring the zoom to the pinch center
+  // rather than, say, the board's top-left corner.
+  const after = await cellUnderCenter()
+  expect(after).toBe(before)
+})
